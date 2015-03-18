@@ -83,16 +83,12 @@ my $stop_flag;		# Stop the daemon and delete all config files
 my $release_flag;	# Stop the daemon, but leave config file
 my $renew_flag;		# Re-start the daemon.  Functionally same as start_flag
 my $ifname;
-my $temporary;
-my $params_only;
 
 GetOptions("start" => \$start_flag,
 	   "stop" => \$stop_flag,
 	   "release" => \$release_flag,
 	   "renew" => \$renew_flag,
-	   "ifname=s" => \$ifname,
-           "temporary" => \$temporary,
-           "parameters-only" => \$params_only
+	   "ifname=s" => \$ifname
     ) or usage();
 
 die "Error: Interface name must be specified with --ifname parameter.\n"
@@ -134,6 +130,13 @@ if (defined($stop_flag)|| defined ($release_flag)) {
 
 if (defined($start_flag) || defined ($renew_flag)) {
 
+    my $intf = new Vyatta::Interface($ifname)
+        or die "Can't find interface $ifname\n";
+    my $level = $intf->path() . ' dhcpv6-options';
+
+    my $config = new Vyatta::Config;
+    $config->setLevel($level);
+
     # Generate the DHCP client config file...
     gen_conf_file($conffile, $ifname);
 
@@ -142,15 +145,29 @@ if (defined($start_flag) || defined ($renew_flag)) {
     printf("Stopping old daemon...\n");
     system("$cmdname -6 -pf $pidfile -x $ifname");
 
-    if (defined($temporary) && defined($params_only)) {
-        print "Error: temporary and parameters-only options are mutually exclusive!\n";
+    my $temporary = $config->exists('temporary');
+    my $params_only = $config->exists('parameters-only');
+    my $prefix_delegation = $config->exists('prefix-delegation');
+     
+    my @h = ($temporary, $params_only, $prefix_delegation);
+
+    # Test values, accept only one
+    if (scalar(grep { $_ } @h) > 1) {
+        print "Error: temporary, parameters-only and prefix-delegation options are mutually exclusive!\n";
         exit 1;
     }
 
-    my $temp_opt = defined($temporary) ? "-T" : "";
-    my $po_opt = defined($params_only) ? "-S" : "";
+    my $opt = "";
+    
+    if ($temporary) {
+        $opt = "-T";
+    } elsif ($params_only) {
+        $opt = "-S";
+    } elsif ($prefix_delegation) {
+        $opt = "-P";
+    }
 
     printf("Starting new daemon...\n");
-    exec "$cmdname -6 $temp_opt $po_opt -nw -cf $conffile -pf $pidfile -lf $leasefile $ifname"
+    exec "$cmdname -6 $opt -nw -cf $conffile -pf $pidfile -lf $leasefile $ifname"
 	or die "Can't exec $cmdname";
 }
